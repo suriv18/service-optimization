@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import date
 from typing import Optional
@@ -33,7 +33,7 @@ class AlertaCriticaModel(BaseModel):
 
 
 class ParametrosSolverModel(BaseModel):
-    tiempo_limite_s: int = 30
+    tiempo_limite_s: int = Field(default=30, ge=1)
     objetivo: str = "DISTANCIA"
     penalta_critica: float = 1000.0
 

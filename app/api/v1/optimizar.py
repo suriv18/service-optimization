@@ -1,5 +1,3 @@
-import time
-
 from fastapi import APIRouter
 
 from app.application.solver import CvrptwSolver
