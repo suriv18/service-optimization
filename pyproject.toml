@@ -18,3 +18,14 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-httpx>=0.30",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
