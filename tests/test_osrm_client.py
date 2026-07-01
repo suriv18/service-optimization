@@ -230,6 +230,44 @@ class TestDistanceMatrix:
         assert matrix[0][0] == pytest.approx(0.0)
 
     @pytest.mark.asyncio
+    async def test_osrm_ok_sin_distances_usa_fallback(self):
+        """
+        OSRM responde code=Ok pero sin campo 'distances' (línea 109).
+        Debe emitir warning y calcular con haversine×1.3.
+        """
+        coords = [
+            (-12.0612, -77.0617),   # depósito Lima Centro
+            (-12.1347, -77.0325),   # Barranco
+        ]
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "code": "Ok",
+            "durations": [[0.0, 900.0], [900.0, 0.0]],
+            # sin 'distances' — fuerza la rama de warning + fallback
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            client = OsrmClient()
+            matrix = await client.distance_matrix(coords)
+
+        # Debe usar haversine*1.3 como fallback
+        expected = _road_distance_m(
+            coords[0][0], coords[0][1],
+            coords[1][0], coords[1][1],
+        )
+        assert matrix[0][0] == pytest.approx(0.0)
+        assert matrix[1][1] == pytest.approx(0.0)
+        assert matrix[0][1] == pytest.approx(expected)
+        assert matrix[1][0] == pytest.approx(expected)
+
+    @pytest.mark.asyncio
     async def test_lista_vacia_retorna_vacia(self):
         client = OsrmClient()
         result = await client.distance_matrix([])
