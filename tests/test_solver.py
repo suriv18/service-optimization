@@ -273,3 +273,105 @@ class TestSolverIntegracion:
         respuesta = await solver.resolver(solicitud)
 
         assert respuesta.resuelto_en_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_objetivo_tiempo_usa_callback_duracion(self):
+        """
+        Con objetivo='TIEMPO' el solver minimiza duración (líneas 179-182).
+        Surquillo Norte — 1 unidad, ventana amplia para garantizar factibilidad.
+        """
+        solicitud = _solicitud_simple(
+            params=ParametrosSolverModel(tiempo_limite_s=1, objetivo="TIEMPO"),
+        )
+        with patch("app.infrastructure.osrm_client.settings") as mock_settings:
+            mock_settings.osrm_url = "http://invalid-host-test:5000"
+            osrm = OsrmClient()
+
+        solver = CvrptwSolver(osrm)
+        respuesta = await solver.resolver(solicitud)
+
+        assert respuesta.estado in ("FACTIBLE", "PARCIAL")
+        assert respuesta.resuelto_en_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_solver_sin_solucion_retorna_no_factible(self):
+        """
+        Cuando SolveWithParameters devuelve None (sin solución factible),
+        el solver retorna NO_FACTIBLE (línea 259).
+
+        Se mockea directamente SolveWithParameters porque con AddDisjunction(penalty=0)
+        OR-Tools siempre encuentra la solución trivial (no visitar ninguna zona).
+        El None real ocurre si el solver agota el tiempo en un modelo muy grande.
+        """
+        solicitud = _solicitud_simple()
+        with patch("app.infrastructure.osrm_client.settings") as mock_settings:
+            mock_settings.osrm_url = "http://invalid-host-test:5000"
+            osrm = OsrmClient()
+
+        solver = CvrptwSolver(osrm)
+
+        with patch("app.application.solver.pywrapcp.RoutingModel.SolveWithParameters",
+                   return_value=None):
+            respuesta = await solver.resolver(solicitud)
+
+        assert respuesta.estado == "NO_FACTIBLE"
+        assert "No se encontró solución" in respuesta.mensaje
+        assert respuesta.distancia_total_m == 0.0
+        assert respuesta.duracion_total_s == 0
+        assert respuesta.rutas_por_unidad == []
+
+    @pytest.mark.asyncio
+    async def test_zona_critica_no_atendida_retorna_parcial(self):
+        """
+        Zona crítica cuya demanda (9000 kg) supera la capacidad del camión (1 kg).
+        El solver descarta la zona pero continúa → estado PARCIAL (líneas 346-347).
+        La disjunction con penalización alta permite que OR-Tools omita la zona
+        en lugar de declarar el problema infactible globalmente.
+        Zona: Puente Piedra — zona crítica de acumulación irregular.
+        """
+        from app.domain.models import AlertaCriticaModel
+
+        zona_critica = ZonaModel(
+            zona_id=UUID("bbbbbb98-0000-0000-0000-000000000098"),
+            latitud=-11.8650,
+            longitud=-77.0750,
+            demanda_kg=9000.0,     # imposible para el camión de 1 kg
+            ventana_inicio="06:00",
+            ventana_fin="10:00",
+            prioridad=5,
+        )
+        unidad_minima = UnidadModel(
+            unidad_id=UUID("aaaaaaf1-0000-0000-0000-000000000098"),
+            capacidad_kg=1.0,
+            inicio_disponibilidad="05:00",
+            fin_disponibilidad="13:00",
+        )
+        alerta = AlertaCriticaModel(
+            alerta_id=UUID("cccccc98-0000-0000-0000-000000000098"),
+            zona_id=zona_critica.zona_id,
+            nivel_criticidad="CRITICA",
+        )
+        solicitud = SolicitudOptimizacion(
+            tenant_id=TENANT_MML,
+            distrito_id=UUID("22222222-2222-2222-2222-222222222222"),
+            fecha_operacion=date(2026, 6, 29),
+            deposito_inicio=DEPOSITO_INICIO,
+            deposito_fin=DEPOSITO_FIN,
+            unidades=[unidad_minima],
+            zonas=[zona_critica],
+            alertas_criticas=[alerta],
+            parametros_solver=ParametrosSolverModel(
+                tiempo_limite_s=1,
+                penalta_critica=1000.0,
+            ),
+        )
+        with patch("app.infrastructure.osrm_client.settings") as mock_settings:
+            mock_settings.osrm_url = "http://invalid-host-test:5000"
+            osrm = OsrmClient()
+
+        solver = CvrptwSolver(osrm)
+        respuesta = await solver.resolver(solicitud)
+
+        assert respuesta.estado == "PARCIAL"
+        assert "crítica" in respuesta.mensaje
+        assert respuesta.rutas_por_unidad == []
